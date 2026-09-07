@@ -32,14 +32,15 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger()
 logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 
-NODEGROUPS = ["system", "user", "utils"]
+NODEGROUP_SUFFIXES = ["system", "user", "utils"]
 DESIRED_SIZE_BY_ACTION = {"start": 2, "stop": 0}
 RETRYABLE_ERROR_CODES = {"ResourceInUseException", "ThrottlingException"}
 MAX_ATTEMPTS = 4
 BASE_BACKOFF_SECONDS = 5
 # Fixed settings loaded once at startup: the three node groups this script is
-# allowed to touch, the desired size for each action, and how to handle AWS
-# telling us it's temporarily busy.
+# allowed to touch (as suffixes -- see handler() for how the real AWS node
+# group name is built from these), the desired size for each action, and how
+# to handle AWS telling us it's temporarily busy.
 
 
 def _log(level, message, **fields):
@@ -199,7 +200,14 @@ def handler(event, context):
 
     eks = boto3.client("eks")
     desired_size = DESIRED_SIZE_BY_ACTION[action]
-    results = [_scale_nodegroup(eks, cluster_name, ng, desired_size) for ng in NODEGROUPS]
+    # Real EKS node group names aren't the bare suffix -- the Terraform module that
+    # creates them (wso2/aws-terraform-modules//modules/aws/EKS-Node-Group) always
+    # builds them as "{cluster_name}-{suffix}-node-group" (see its eks_node_group.tf).
+    # A bare "system"/"user"/"utils" was never a real node group name against any
+    # deployment using that module -- confirmed via ResourceNotFoundException on a
+    # real invoke, not a hypothetical.
+    nodegroups = [f"{cluster_name}-{suffix}-node-group" for suffix in NODEGROUP_SUFFIXES]
+    results = [_scale_nodegroup(eks, cluster_name, ng, desired_size) for ng in nodegroups]
 
     for r in results:
         _log(
